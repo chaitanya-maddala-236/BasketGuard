@@ -1,0 +1,29 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: basketguard
+      POSTGRES_USER: basketguard
+      POSTGRES_PASSWORD: basketguard
+    ports:
+      - "5432:5432"
+    volumes:
+      - basketguard_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U basketguard -d basketguard"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://basketguard:basketguard@db:5432/basketguard
+      JWT_SECRET: local-compose-secret-change-before-deploy
+      ACCESS_TOKEN_MINUTES: 60
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+volumes:
+  basketguard_postgres:
