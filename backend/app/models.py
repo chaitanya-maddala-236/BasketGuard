@@ -47,6 +47,7 @@ class Product(Base):
     price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     unit: Mapped[str] = mapped_column(String(60))
     emoji: Mapped[str] = mapped_column(String(12), default="🛒")
+    substitution_group: Mapped[str] = mapped_column(String(60), default="general", index=True)
     image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     active: Mapped[bool] = mapped_column(default=True)
     category: Mapped[Category] = relationship()

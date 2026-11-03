@@ -8,8 +8,10 @@ import com.basketguard.android.data.local.CartEntity
 import com.basketguard.android.data.network.OrderDto
 import com.basketguard.android.data.network.SubstitutionDto
 import com.basketguard.android.data.repository.BasketRepository
+import com.basketguard.android.domain.BasketRescueItem
 import com.basketguard.android.domain.Category
 import com.basketguard.android.domain.Product
+import com.basketguard.android.domain.ProductAlternative
 import com.basketguard.android.domain.demoCategories
 import com.basketguard.android.domain.demoProducts
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,6 +29,10 @@ data class AppUiState(
     val message: String? = null,
     val orders: List<OrderDto> = emptyList(),
     val substitutions: Map<String, List<SubstitutionDto>> = emptyMap(),
+    val rescueBudgetPercent: Int = 15,
+    val rescueItems: List<BasketRescueItem> = emptyList(),
+    val alternatives: Map<Int, List<ProductAlternative>> = emptyMap(),
+    val alternativesLoading: Set<Int> = emptySet(),
 )
 
 @HiltViewModel
@@ -47,7 +53,8 @@ class AppViewModel @Inject constructor(private val repository: BasketRepository)
             repository.cart.collect { items -> mutableState.update { it.copy(cart = items) } }
         }
         viewModelScope.launch {
-            mutableState.update { it.copy(accountName = repository.accountName()) }
+            mutableState.update { it.copy(accountName = repository.accountName(),
+                rescueBudgetPercent = repository.rescueBudgetPercent()) }
         }
     }
 
@@ -67,6 +74,7 @@ class AppViewModel @Inject constructor(private val repository: BasketRepository)
                         0, "", 0), quantity,
                 )
             }
+            mutableState.update { it.copy(rescueItems = it.rescueItems.filterNot { rescue -> rescue.source.id == productId }) }
         }
     }
 
@@ -118,21 +126,133 @@ class AppViewModel @Inject constructor(private val repository: BasketRepository)
             try {
                 val validation = repository.validate(current.cart)
                 if (!validation.valid) {
-                    val names = validation.unavailable.mapNotNull { id -> current.products.firstOrNull { it.id == id }?.name }
-                    mutableState.update { it.copy(busy = false,
-                        message = if (names.isEmpty()) "Stock changed. Review your basket and retry."
-                        else "Stock changed for ${names.joinToString()}. Choose a replacement or update quantity.") }
+                    val rescueItems = prepareRescue(validation, current.cart, current.products,
+                        current.rescueBudgetPercent)
+                    mutableState.update { it.copy(busy = false, rescueItems = rescueItems, message = null) }
                     return@launch
                 }
                 val order = repository.placeOrder(address.trim(), current.cart)
-                mutableState.update { it.copy(busy = false, message = "Order placed · ${order.id.take(8)}") }
+                mutableState.update { it.copy(busy = false, rescueItems = emptyList(),
+                    message = "Order placed · ${order.id.take(8)}") }
                 loadOrders()
             } catch (error: Exception) {
-                mutableState.update { it.copy(busy = false,
-                    message = if (error.message?.contains("409") == true)
-                        "A product just sold out. Refresh your basket before retrying."
-                    else error.message?.take(140) ?: "Couldn’t place your order. Try again.") }
+                val refreshed = try { repository.validate(state.value.cart) } catch (_: Exception) { null }
+                if (refreshed != null && !refreshed.valid) {
+                    val rescues = prepareRescue(refreshed, state.value.cart, state.value.products,
+                        state.value.rescueBudgetPercent)
+                    mutableState.update { it.copy(busy = false, rescueItems = rescues, message = null) }
+                } else {
+                    mutableState.update { it.copy(busy = false,
+                        message = if (error.message?.contains("409") == true)
+                            "Stock changed while you checked out. Review your basket and retry."
+                        else error.message?.take(140) ?: "Couldn’t place your order. Try again.") }
+                }
             }
+        }
+    }
+
+    fun loadAlternatives(product: Product, quantity: Int = 1) {
+        viewModelScope.launch {
+            val budget = state.value.rescueBudgetPercent
+            mutableState.update { it.copy(alternativesLoading = it.alternativesLoading + product.id) }
+            val alternatives = repository.alternatives(product, quantity, budget)
+            mutableState.update { it.copy(
+                alternatives = it.alternatives + (product.id to alternatives),
+                alternativesLoading = it.alternativesLoading - product.id,
+            ) }
+        }
+    }
+
+    fun setRescueBudget(percent: Int) {
+        if (percent !in listOf(0, 15, 30)) return
+        viewModelScope.launch {
+            try {
+                val current = state.value.rescueItems
+                mutableState.update { it.copy(rescueBudgetPercent = percent,
+                    alternatives = emptyMap(),
+                    rescueItems = current.map { row -> row.copy(loading = true, alternatives = emptyList()) }) }
+                repository.saveRescueBudgetPercent(percent)
+                val updated = current.map { row ->
+                    row.copy(loading = false, alternatives = repository.alternatives(row.source, row.quantity, percent))
+                }
+                mutableState.update { latest ->
+                    if (latest.rescueBudgetPercent != percent) latest
+                    else latest.copy(rescueItems = latest.rescueItems.map { row ->
+                        updated.firstOrNull { replacement -> replacement.source.id == row.source.id } ?: row.copy(loading = false)
+                    }, alternatives = emptyMap(), alternativesLoading = emptySet())
+                }
+            } catch (_: Exception) {
+                mutableState.update { latest ->
+                    latest.copy(rescueItems = latest.rescueItems.map { it.copy(loading = false) },
+                        message = "Couldn’t update your swap budget. Try again.")
+                }
+            }
+        }
+    }
+
+    fun applyRescue(sourceProductId: Int, alternative: ProductAlternative, quantity: Int) {
+        viewModelScope.launch {
+            mutableState.update { it.copy(busy = true) }
+            try {
+                repository.replaceCartItem(sourceProductId, alternative, quantity)
+                mutableState.update { it.copy(busy = false,
+                    rescueItems = it.rescueItems.filterNot { row -> row.source.id == sourceProductId },
+                    message = "${alternative.product.name} added within your swap budget.") }
+            } catch (error: Exception) {
+                mutableState.update { it.copy(busy = false,
+                    message = error.message ?: "That replacement is no longer available.") }
+            }
+        }
+    }
+
+    fun keepAvailable(sourceProductId: Int, available: Int) {
+        val source = state.value.rescueItems.firstOrNull { it.source.id == sourceProductId } ?: return
+        viewModelScope.launch {
+            mutableState.update { it.copy(busy = true) }
+            try {
+                repository.setQuantity(source.source.copy(available = available), available)
+                mutableState.update { it.copy(busy = false,
+                    rescueItems = it.rescueItems.filterNot { row -> row.source.id == sourceProductId },
+                    message = "Basket updated to the $available currently available.") }
+            } catch (error: Exception) {
+                mutableState.update { it.copy(busy = false, message = error.message ?: "Couldn’t update this basket item.") }
+            }
+        }
+    }
+
+    fun removeUnavailable(sourceProductId: Int) {
+        val source = state.value.rescueItems.firstOrNull { it.source.id == sourceProductId } ?: return
+        viewModelScope.launch {
+            mutableState.update { it.copy(busy = true) }
+            try {
+                repository.setQuantity(source.source, 0)
+                mutableState.update { it.copy(busy = false,
+                    rescueItems = it.rescueItems.filterNot { row -> row.source.id == sourceProductId },
+                    message = "${source.source.name} removed from your basket.") }
+            } catch (error: Exception) {
+                mutableState.update { it.copy(busy = false, message = error.message ?: "Couldn’t remove this item.") }
+            }
+        }
+    }
+
+    private suspend fun prepareRescue(
+        validation: com.basketguard.android.data.network.CartValidationDto,
+        cart: List<CartEntity>,
+        products: List<Product>,
+        budget: Int,
+    ): List<BasketRescueItem> {
+        val lines = cart.associateBy { it.productId }
+        return validation.items.filterNot { it.valid }.mapNotNull { item ->
+            val line = lines[item.product_id] ?: return@mapNotNull null
+            val source = products.firstOrNull { it.id == line.productId } ?: Product(
+                line.productId, line.name, "", line.price, line.unit, line.emoji, 0, "", item.available,
+            )
+            BasketRescueItem(
+                source = source,
+                quantity = item.requested,
+                available = item.available,
+                alternatives = repository.alternatives(source, item.requested, budget),
+            )
         }
     }
 

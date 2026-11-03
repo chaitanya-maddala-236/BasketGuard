@@ -17,6 +17,14 @@ interface BasketGuardApi {
         @Query("store_id") storeId: Int = 1,
     ): List<ProductDto>
 
+    @GET("products/{productId}/alternatives")
+    suspend fun alternatives(
+        @Path("productId") productId: Int,
+        @Query("store_id") storeId: Int = 1,
+        @Query("quantity") quantity: Int = 1,
+        @Query("max_price") maxPrice: Double,
+    ): BasketRescueDto
+
     @GET("categories")
     suspend fun categories(): List<CategoryDto>
 

@@ -36,14 +36,28 @@ def client(monkeypatch):
         ])
         db.flush()
         first = Product(id=1, name="Avocado", category_id=1, description="Ripe",
-                        price=Decimal("1.50"), unit="piece", emoji="🥑")
+                        price=Decimal("1.50"), unit="piece", emoji="🥑",
+                        substitution_group="avocado")
         replacement = Product(id=2, name="Spinach", category_id=1, description="Fresh",
-                              price=Decimal("2.00"), unit="bag", emoji="🥬")
-        db.add_all([first, replacement])
+                              price=Decimal("2.00"), unit="bag", emoji="🥬",
+                              substitution_group="leafy-greens")
+        close_match = Product(id=3, name="Green avocado", category_id=1, description="Ripe",
+                              price=Decimal("1.60"), unit="piece", emoji="🥑",
+                              substitution_group="avocado")
+        over_budget = Product(id=4, name="Organic avocado", category_id=1, description="Organic",
+                              price=Decimal("2.25"), unit="piece", emoji="🥑",
+                              substitution_group="avocado")
+        too_few = Product(id=5, name="Mini avocado", category_id=1, description="Ripe",
+                          price=Decimal("1.25"), unit="piece", emoji="🥑",
+                          substitution_group="avocado")
+        db.add_all([first, replacement, close_match, over_budget, too_few])
         db.flush()
         db.add_all([
             Inventory(store_id=1, product_id=1, stock_on_hand=5, reserved_qty=0),
             Inventory(store_id=1, product_id=2, stock_on_hand=10, reserved_qty=0),
+            Inventory(store_id=1, product_id=3, stock_on_hand=4, reserved_qty=0),
+            Inventory(store_id=1, product_id=4, stock_on_hand=4, reserved_qty=0),
+            Inventory(store_id=1, product_id=5, stock_on_hand=1, reserved_qty=0),
         ])
         db.commit()
 
@@ -97,6 +111,21 @@ def test_checkout_cannot_oversell_inventory(client: TestClient):
     assert first.status_code == 201
     assert second.status_code == 409
     assert available(client) == 2
+
+
+def test_basket_rescue_respects_budget_and_requested_quantity(client: TestClient):
+    response = client.get("/api/v1/products/1/alternatives", params={
+        "store_id": 1,
+        "quantity": 2,
+        "max_price": 2.00,
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["product_id"] == 1
+    assert body["requested_quantity"] == 2
+    assert [item["id"] for item in body["alternatives"]] == [3]
+    assert body["alternatives"][0]["available_stock"] == 4
 
 
 def test_checkout_retry_returns_original_order_without_consuming_stock_twice(client: TestClient):

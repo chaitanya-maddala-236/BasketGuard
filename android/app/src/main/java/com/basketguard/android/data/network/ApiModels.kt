@@ -12,6 +12,27 @@ data class ProductDto(
     val available_stock: Int = 0,
 )
 
+data class AlternativeDto(
+    val id: Int,
+    val name: String,
+    val category_id: Int,
+    val description: String,
+    val price: Double,
+    val unit: String,
+    val emoji: String,
+    val image_url: String? = null,
+    val available_stock: Int = 0,
+    val price_difference: Double,
+    val reason: String,
+)
+
+data class BasketRescueDto(
+    val product_id: Int,
+    val requested_quantity: Int,
+    val max_price: Double,
+    val alternatives: List<AlternativeDto>,
+)
+
 data class CategoryDto(val id: Int, val name: String, val icon: String)
 data class CartLineDto(val product_id: Int, val quantity: Int)
 data class CartValidationRequest(val store_id: Int = 1, val items: List<CartLineDto>)

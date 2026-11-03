@@ -2,6 +2,7 @@ package com.basketguard.android.data.local
 
 import androidx.room.Dao
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
@@ -21,4 +22,10 @@ interface CartDao {
 
     @Query("DELETE FROM cart_items")
     suspend fun clear()
+
+    @Transaction
+    suspend fun replaceItem(sourceProductId: Int, replacement: CartEntity) {
+        if (sourceProductId != replacement.productId) remove(sourceProductId)
+        upsert(replacement)
+    }
 }

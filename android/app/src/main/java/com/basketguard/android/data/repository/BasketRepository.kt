@@ -6,6 +6,7 @@ import com.basketguard.android.data.local.CartEntity
 import com.basketguard.android.data.local.SessionStore
 import com.basketguard.android.data.local.toCartEntity
 import com.basketguard.android.data.sync.scheduleCartSync
+import com.basketguard.android.data.network.AlternativeDto
 import com.basketguard.android.data.network.AuthRequest
 import com.basketguard.android.data.network.BasketGuardApi
 import com.basketguard.android.data.network.CartLineDto
@@ -18,6 +19,7 @@ import com.basketguard.android.data.network.SubstitutionDto
 import com.basketguard.android.data.network.SubstitutionCreateRequest
 import com.basketguard.android.domain.Category
 import com.basketguard.android.domain.Product
+import com.basketguard.android.domain.ProductAlternative
 import com.basketguard.android.domain.demoCategories
 import com.basketguard.android.domain.demoProducts
 import kotlinx.coroutines.flow.Flow
@@ -29,15 +31,18 @@ class BasketRepository(
     private val database: BasketGuardDatabase,
     private val api: BasketGuardApi,
 ) {
+    private val appContext = context.applicationContext
     private val cartDao = database.cartDao()
-    private val session = SessionStore(context.applicationContext)
+    private val session = SessionStore(appContext)
+    @Volatile private var cachedProducts: List<Product> = demoProducts
     val cart: Flow<List<CartEntity>> = cartDao.observeCart()
 
     suspend fun catalog(): CatalogSnapshot = try {
         val categories = api.categories()
         val categoryNames = categories.associate { it.id to it.name }
         val products = api.products().map { it.toDomain(categoryNames[it.category_id].orEmpty()) }
-        CatalogSnapshot(products.ifEmpty { demoProducts },
+        cachedProducts = products.ifEmpty { demoProducts }
+        CatalogSnapshot(cachedProducts,
             listOf(Category(0, "All", "✦")) + categories.map { Category(it.id, it.name, it.icon) },
             connected = true)
     } catch (_: Exception) {
@@ -46,11 +51,29 @@ class BasketRepository(
 
     suspend fun setQuantity(product: Product, quantity: Int) {
         if (quantity <= 0) cartDao.remove(product.id) else cartDao.upsert(product.toCartEntity(quantity))
-        scheduleCartSync(context)
+        scheduleCartSync(appContext)
     }
 
     suspend fun accountName(): String? = session.name()
     suspend fun hasAccount(): Boolean = !session.token().isNullOrBlank()
+    suspend fun rescueBudgetPercent(): Int = session.rescueBudgetPercent()
+    suspend fun saveRescueBudgetPercent(percent: Int) = session.saveRescueBudgetPercent(percent)
+
+    suspend fun alternatives(source: Product, quantity: Int, budgetPercent: Int): List<ProductAlternative> {
+        val maxPrice = source.price * (1.0 + budgetPercent / 100.0)
+        return try {
+            api.alternatives(productId = source.id, quantity = quantity, maxPrice = maxPrice)
+                .alternatives.map { it.toDomainAlternative(source.category) }
+        } catch (_: Exception) {
+            cachedProducts.asSequence()
+                .filter { it.id != source.id && it.categoryId == source.categoryId }
+                .filter { it.available >= quantity && it.price <= maxPrice }
+                .map { ProductAlternative(it, it.price - source.price, "In stock · within your swap cap") }
+                .sortedBy { kotlin.math.abs(it.priceDifference) }
+                .take(5)
+                .toList()
+        }
+    }
 
     suspend fun authenticate(name: String, email: String, password: String, register: Boolean): String {
         val result = if (register) {
@@ -63,6 +86,18 @@ class BasketRepository(
     }
 
     suspend fun signOut() = session.clear()
+
+    suspend fun replaceCartItem(sourceProductId: Int, replacement: ProductAlternative, quantity: Int) {
+        val current = cartDao.getCart()
+        val source = current.firstOrNull { it.productId == sourceProductId }
+            ?: error("That basket item has already changed.")
+        val replacementCount = (current.firstOrNull { it.productId == replacement.product.id }?.quantity ?: 0) + quantity
+        if (replacementCount > replacement.product.available) {
+            error("Only ${replacement.product.available} ${replacement.product.name} available. Refresh the basket.")
+        }
+        cartDao.replaceItem(sourceProductId, replacement.product.toCartEntity(replacementCount))
+        scheduleCartSync(appContext)
+    }
 
     suspend fun validate(items: List<CartEntity>) = api.validateCart(
         CartValidationRequest(items = items.map { CartLineDto(it.productId, it.quantity) }),
@@ -137,5 +172,11 @@ class BasketRepository(
         categoryId = category_id,
         category = category,
         available = available_stock,
+    )
+
+    private fun AlternativeDto.toDomainAlternative(category: String) = ProductAlternative(
+        product = Product(id, name, description, price, unit, emoji, category_id, category, available_stock),
+        priceDifference = price_difference,
+        reason = reason,
     )
 }

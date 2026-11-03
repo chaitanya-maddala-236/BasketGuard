@@ -90,7 +90,9 @@ import com.basketguard.android.AppViewModel
 import com.basketguard.android.data.local.CartEntity
 import com.basketguard.android.data.network.OrderDto
 import com.basketguard.android.data.network.SubstitutionDto
+import com.basketguard.android.domain.BasketRescueItem
 import com.basketguard.android.domain.Product
+import com.basketguard.android.domain.ProductAlternative
 import java.util.Locale
 
 private enum class Tab(val title: String) { HOME("Home"), CART("Basket"), ORDERS("Orders"), PROFILE("Profile") }
@@ -100,6 +102,7 @@ private val Warm = Color(0xFFF7F6F0)
 private val Ink = Color(0xFF1E2924)
 private val Muted = Color(0xFF748078)
 private val Orange = Color(0xFFFFE5CC)
+private val RescueWash = Color(0xFFFFF0E4)
 
 @Composable
 fun BasketGuardApp(viewModel: AppViewModel) {
@@ -110,6 +113,10 @@ fun BasketGuardApp(viewModel: AppViewModel) {
 
     LaunchedEffect(state.message) {
         state.message?.let {
+            if (it.startsWith("Order placed")) {
+                checkout = false
+                tab = Tab.ORDERS
+            }
             snackbar.showSnackbar(it)
             viewModel.clearMessage()
         }
@@ -148,6 +155,10 @@ fun BasketGuardApp(viewModel: AppViewModel) {
                     onBack = { checkout = false },
                     onPlaceOrder = { viewModel.placeOrder(it) },
                     onSignIn = { checkout = false; tab = Tab.PROFILE },
+                    onBudget = viewModel::setRescueBudget,
+                    onAlternative = viewModel::applyRescue,
+                    onKeepAvailable = viewModel::keepAvailable,
+                    onRemoveUnavailable = viewModel::removeUnavailable,
                 )
                 tab == Tab.HOME -> HomeScreen(state, viewModel, onProfile = { tab = Tab.PROFILE })
                 tab == Tab.CART -> CartScreen(state, viewModel, onCheckout = { checkout = true })
@@ -165,6 +176,9 @@ private fun HomeScreen(state: AppUiState, viewModel: AppViewModel, onProfile: ()
     var selectedCategory by rememberSaveable { mutableStateOf(0) }
     var details by remember { mutableStateOf<Product?>(null) }
     var swapFor by remember { mutableStateOf<Product?>(null) }
+    LaunchedEffect(swapFor?.id, state.rescueBudgetPercent) {
+        swapFor?.let { viewModel.loadAlternatives(it, quantity = 1) }
+    }
     val cartQuantities = state.cart.associate { it.productId to it.quantity }
     val filtered = state.products.filter { product ->
         (selectedCategory == 0 || product.categoryId == selectedCategory) &&
@@ -198,7 +212,7 @@ private fun HomeScreen(state: AppUiState, viewModel: AppViewModel, onProfile: ()
         item { BasketHero() }
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Shop by mood", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Ink)
+                Text("Browse by aisle", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Ink)
                 Spacer(Modifier.weight(1f))
                 Text("See all", color = Forest, style = MaterialTheme.typography.labelLarge)
             }
@@ -254,19 +268,25 @@ private fun HomeScreen(state: AppUiState, viewModel: AppViewModel, onProfile: ()
         })
     }
     swapFor?.let { product ->
-        val options = state.products.filter { it.categoryId == product.categoryId && it.id != product.id && it.available > 0 }
+        val options = state.alternatives[product.id].orEmpty()
         ModalBottomSheet(onDismissRequest = { swapFor = null }, containerColor = Warm) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp).padding(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("A good swap", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = Ink)
-                Text("${product.name} is out right now. Pick another in-stock favourite.", color = Muted)
-                options.forEach { replacement ->
-                    ReplacementRow(replacement, onClick = {
-                        viewModel.add(replacement)
+                Text("Basket Rescue", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = Ink)
+                Text("${product.name} is out. Every swap below is in stock and within your cap.", color = Muted)
+                RescueBudgetSelector(state.rescueBudgetPercent, viewModel::setRescueBudget)
+                if (product.id in state.alternativesLoading) {
+                    CircularProgressIndicator(Modifier.size(24.dp), color = Forest, strokeWidth = 2.dp)
+                }
+                options.forEach { alternative ->
+                    RescueAlternativeRow(alternative, enabled = !state.busy, onChoose = {
+                        viewModel.add(alternative.product)
                         swapFor = null
-                        viewModel.showMessage("${replacement.name} added to your basket.")
+                        viewModel.showMessage("${alternative.product.name} added to your basket.")
                     })
                 }
-                if (options.isEmpty()) Text("We’ll let you know when this shelf is restocked.", color = Muted)
+                if (options.isEmpty() && product.id !in state.alternativesLoading) {
+                    Text("No swap fits this cap. Raise it a little, or leave this item out.", color = Muted)
+                }
             }
         }
     }
@@ -309,9 +329,9 @@ private fun BasketHero() {
                     }
                 }
                 Spacer(Modifier.height(12.dp))
-                Text("Good food.\nNo checkout surprises.", color = Color.White, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold, lineHeight = 29.sp)
+                Text("Your basket.\nYour call on swaps.", color = Color.White, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold, lineHeight = 29.sp)
                 Spacer(Modifier.height(6.dp))
-                Text("We check every item before your order goes through.", color = Color(0xFFD5E6DC), style = MaterialTheme.typography.bodySmall)
+                Text("Set a price cap. Pick every replacement yourself.", color = Color(0xFFD5E6DC), style = MaterialTheme.typography.bodySmall)
             }
             Text("🧺", fontSize = 54.sp, modifier = Modifier.align(Alignment.CenterEnd).padding(end = 18.dp))
         }
@@ -514,7 +534,129 @@ private fun PriceSummary(subtotal: Double) {
 }
 
 @Composable
-private fun CheckoutScreen(state: AppUiState, onBack: () -> Unit, onPlaceOrder: (String) -> Unit, onSignIn: () -> Unit) {
+private fun RescueBudgetSelector(selected: Int, onSelect: (Int) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("YOUR MAX PRICE INCREASE", color = Muted, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            listOf(0 to "₹0", 15 to "+15%", 30 to "+30%").forEach { (percent, label) ->
+                FilterChip(
+                    selected = selected == percent,
+                    onClick = { onSelect(percent) },
+                    label = { Text(if (percent == 0) "Strict · $label" else "${if (percent == 15) "Balanced" else "Flexible"} · $label") },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RescueAlternativeRow(alternative: ProductAlternative, enabled: Boolean = true, onChoose: () -> Unit) {
+    Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(48.dp).clip(RoundedCornerShape(15.dp)).background(productTint(alternative.product.categoryId)), contentAlignment = Alignment.Center) {
+                Text(alternative.product.emoji, fontSize = 27.sp)
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(alternative.product.name, color = Ink, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(alternative.reason, color = Muted, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(priceDifference(alternative.priceDifference), color = Forest, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+            }
+            Spacer(Modifier.width(6.dp))
+            Column(horizontalAlignment = Alignment.End) {
+                Text(money(alternative.product.price), color = Ink, fontWeight = FontWeight.ExtraBold)
+                TextButton(onClick = onChoose, enabled = enabled, contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 9.dp, vertical = 0.dp)) {
+                    Text("Choose", color = Forest, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BasketRescuePanel(
+    items: List<BasketRescueItem>,
+    budgetPercent: Int,
+    busy: Boolean,
+    onBudget: (Int) -> Unit,
+    onAlternative: (Int, ProductAlternative, Int) -> Unit,
+    onKeepAvailable: (Int, Int) -> Unit,
+    onRemoveUnavailable: (Int) -> Unit,
+) {
+    Card(shape = RoundedCornerShape(23.dp), colors = CardDefaults.cardColors(containerColor = RescueWash)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(38.dp).clip(RoundedCornerShape(13.dp)).background(Color.White), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Outlined.Shield, contentDescription = null, tint = Forest)
+                }
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Basket Rescue", color = Ink, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.ExtraBold)
+                    Text("A shelf changed. You decide what happens.", color = Muted, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            Text("We found ${items.size} item${if (items.size == 1) "" else "s"} that need your choice before checkout.", color = Ink, style = MaterialTheme.typography.bodyMedium)
+            RescueBudgetSelector(budgetPercent, onBudget)
+            items.forEach { item ->
+                Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                    Column(Modifier.fillMaxWidth().padding(13.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(item.source.emoji, fontSize = 27.sp)
+                            Spacer(Modifier.width(9.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(item.source.name, color = Ink, fontWeight = FontWeight.Bold)
+                                Text("Need ${item.quantity} · ${item.available} available now", color = Muted, style = MaterialTheme.typography.bodySmall)
+                            }
+                            Text(money(item.source.price), color = Ink, fontWeight = FontWeight.Bold)
+                        }
+                        if (item.loading) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                CircularProgressIndicator(Modifier.size(16.dp), color = Forest, strokeWidth = 2.dp)
+                                Text("Finding in-stock alternatives…", color = Muted, style = MaterialTheme.typography.bodySmall)
+                            }
+                        } else if (item.alternatives.isNotEmpty()) {
+                            Text("IN STOCK FOR YOUR FULL QUANTITY", color = Forest, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.ExtraBold)
+                            item.alternatives.forEach { alternative ->
+                                RescueAlternativeRow(alternative, enabled = !busy) {
+                                    onAlternative(item.source.id, alternative, item.quantity)
+                                }
+                            }
+                        } else {
+                            Text("No same-use replacement fits this cap and quantity.", color = Muted, style = MaterialTheme.typography.bodySmall)
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (item.available in 1 until item.quantity) {
+                                OutlinedButton(
+                                    onClick = { onKeepAvailable(item.source.id, item.available) },
+                                    enabled = !busy,
+                                    modifier = Modifier.weight(1f), shape = RoundedCornerShape(13.dp),
+                                ) { Text("Keep ${item.available}") }
+                            }
+                            OutlinedButton(
+                                onClick = { onRemoveUnavailable(item.source.id) },
+                                enabled = !busy,
+                                modifier = Modifier.weight(1f), shape = RoundedCornerShape(13.dp),
+                            ) { Text("Remove item") }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CheckoutScreen(
+    state: AppUiState,
+    onBack: () -> Unit,
+    onPlaceOrder: (String) -> Unit,
+    onSignIn: () -> Unit,
+    onBudget: (Int) -> Unit,
+    onAlternative: (Int, ProductAlternative, Int) -> Unit,
+    onKeepAvailable: (Int, Int) -> Unit,
+    onRemoveUnavailable: (Int) -> Unit,
+) {
     var address by rememberSaveable { mutableStateOf("12 Green Street, Indiranagar, Bengaluru 560038") }
     val subtotal = state.cart.sumOf { it.price * it.quantity }
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
@@ -526,6 +668,19 @@ private fun CheckoutScreen(state: AppUiState, onBack: () -> Unit, onPlaceOrder: 
             }
         }
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 16.dp)) {
+            if (state.rescueItems.isNotEmpty()) {
+                item {
+                    BasketRescuePanel(
+                        items = state.rescueItems,
+                        budgetPercent = state.rescueBudgetPercent,
+                        busy = state.busy,
+                        onBudget = onBudget,
+                        onAlternative = onAlternative,
+                        onKeepAvailable = onKeepAvailable,
+                        onRemoveUnavailable = onRemoveUnavailable,
+                    )
+                }
+            }
             item {
                 SectionLabel("DELIVERY ADDRESS")
                 Spacer(Modifier.height(8.dp))
@@ -576,12 +731,16 @@ private fun CheckoutScreen(state: AppUiState, onBack: () -> Unit, onPlaceOrder: 
         }
         Button(
             onClick = { onPlaceOrder(address) },
-            enabled = !state.busy && state.cart.isNotEmpty() && state.accountName != null,
+            enabled = !state.busy && state.cart.isNotEmpty() && state.accountName != null && state.rescueItems.isEmpty(),
             modifier = Modifier.fillMaxWidth().height(54.dp),
             shape = RoundedCornerShape(17.dp),
         ) {
             if (state.busy) CircularProgressIndicator(Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
-            else Text("Place order  ·  ${money(subtotal)}", fontWeight = FontWeight.Bold)
+            else Text(
+                if (state.rescueItems.isNotEmpty()) "Resolve ${state.rescueItems.size} basket issue${if (state.rescueItems.size == 1) "" else "s"}"
+                else "Place order  ·  ${money(subtotal)}",
+                fontWeight = FontWeight.Bold,
+            )
         }
         Spacer(Modifier.height(14.dp))
     }

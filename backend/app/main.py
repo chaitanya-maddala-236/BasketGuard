@@ -6,14 +6,14 @@ from decimal import Decimal
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, inspect, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.db import Base, SessionLocal, engine, get_db
 from app.models import (Address, Cart, CartItem, Category, Inventory, Order,
                         OrderItem, Product, Reservation, Store, Substitution, User)
-from app.schemas import (CartLine, CartSyncRequest, CartSyncResponse, CartValidationItem,
+from app.schemas import (AlternativeOut, BasketRescueOut, CartLine, CartSyncRequest, CartSyncResponse, CartValidationItem,
                          CartValidationRequest, CartValidationResponse, CategoryOut,
                          LoginRequest, OrderItemOut, OrderOut, OrderRequest, ProductOut,
                          RegisterRequest, ReservationOut, ReservationRequest,
@@ -24,39 +24,62 @@ from app.security import create_access_token, current_user, hash_password, verif
 
 SEED_CATEGORIES = [
     ("Fresh produce", "🥑"), ("Dairy & eggs", "🥛"), ("Bakery", "🥖"),
-    ("Pantry", "🥫"), ("Snacks", "🍿"), ("Beverages", "🧃"),
+    ("Pantry", "🥫"), ("Snacks", "🍿"), ("Beverages", "🧃"), ("Berries", "🫐"),
 ]
 SEED_PRODUCTS = [
-    ("Avocado", 1, "Creamy, ripe Hass avocado", "79.00", "1 piece", "🥑", 24),
-    ("Farm eggs", 2, "Free-range, protein-rich eggs", "99.00", "6 pieces", "🥚", 18),
-    ("Sourdough loaf", 3, "Slow-fermented, baked this morning", "149.00", "400 g", "🍞", 8),
-    ("Oat milk", 2, "Smooth, unsweetened oat drink", "129.00", "1 litre", "🥛", 5),
-    ("Almond butter", 4, "Roasted almonds, no added sugar", "249.00", "200 g", "🥜", 11),
-    ("Baby spinach", 1, "Tender leaves, washed and ready", "59.00", "100 g", "🥬", 16),
-    ("Sea salt chips", 5, "Crispy kettle-cooked potato chips", "49.00", "120 g", "🥔", 20),
-    ("Cold brew coffee", 6, "Slow-steeped, ready to pour", "119.00", "250 ml", "☕", 3),
-    ("Greek yogurt", 2, "Thick, creamy, high protein", "89.00", "400 g", "🍶", 14),
-    ("Wild blueberries", 1, "Sweet-tart berries, frozen fresh", "169.00", "250 g", "🫐", 0),
+    ("Avocado", 1, "Creamy, ripe Hass avocado", "79.00", "1 piece", "🥑", 24, "avocado"),
+    ("Farm eggs", 2, "Free-range, protein-rich eggs", "99.00", "6 pieces", "🥚", 18, "eggs"),
+    ("Sourdough loaf", 3, "Slow-fermented, baked this morning", "149.00", "400 g", "🍞", 8, "bread"),
+    ("Oat milk", 2, "Smooth, unsweetened oat drink", "129.00", "1 litre", "🥛", 5, "plant-milk"),
+    ("Almond butter", 4, "Roasted almonds, no added sugar", "249.00", "200 g", "🥜", 11, "nut-butter"),
+    ("Baby spinach", 1, "Tender leaves, washed and ready", "59.00", "100 g", "🥬", 16, "leafy-greens"),
+    ("Sea salt chips", 5, "Crispy kettle-cooked potato chips", "49.00", "120 g", "🥔", 20, "chips"),
+    ("Cold brew coffee", 6, "Slow-steeped, ready to pour", "119.00", "250 ml", "☕", 3, "cold-brew"),
+    ("Greek yogurt", 2, "Thick, creamy, high protein", "89.00", "400 g", "🍶", 14, "yogurt"),
+    ("Wild blueberries", 7, "Sweet-tart berries, frozen fresh", "169.00", "250 g", "🫐", 0, "berries"),
+    ("Sweet strawberries", 7, "Ripe berries from a nearby farm", "139.00", "250 g", "🍓", 8, "berries"),
+    ("Fresh raspberries", 7, "Delicate, sweet-tart berry punnet", "189.00", "125 g", "🍇", 5, "berries"),
+    ("Barista soy milk", 2, "Creamy plant milk, locally made", "109.00", "1 litre", "🥛", 9, "plant-milk"),
+    ("Multigrain loaf", 3, "Soft loaf with oats and seeds", "119.00", "400 g", "🥖", 7, "bread"),
 ]
 
 
 def init_db() -> None:
+    # Keep databases created by the previous MVP usable after adding rescue metadata.
+    if "products" in inspect(engine).get_table_names():
+        columns = {column["name"] for column in inspect(engine).get_columns("products")}
+        if "substitution_group" not in columns:
+            with engine.begin() as connection:
+                connection.execute(text(
+                    "ALTER TABLE products ADD COLUMN substitution_group VARCHAR(60) NOT NULL DEFAULT 'general'"
+                ))
     Base.metadata.create_all(bind=engine)
     with SessionLocal() as db:
-        if db.get(Store, 1) is not None:
-            return
-        store = Store(id=1, name="BasketGuard Market", location="Central market · 2.1 km")
-        categories = [Category(id=i + 1, name=name, icon=icon)
-                      for i, (name, icon) in enumerate(SEED_CATEGORIES)]
-        db.add_all([store, *categories])
+        store = db.get(Store, 1)
+        if store is None:
+            store = Store(id=1, name="BasketGuard Market", location="Central market · 2.1 km")
+            db.add(store)
+        for category_id, (name, icon) in enumerate(SEED_CATEGORIES, start=1):
+            if db.get(Category, category_id) is None:
+                db.add(Category(id=category_id, name=name, icon=icon))
         db.flush()
-        for name, category_id, description, price, unit, emoji, stock in SEED_PRODUCTS:
-            product = Product(name=name, category_id=category_id, description=description,
-                              price=Decimal(price), unit=unit, emoji=emoji)
-            db.add(product)
-            db.flush()
-            db.add(Inventory(store_id=store.id, product_id=product.id,
-                             stock_on_hand=stock, reserved_qty=0))
+        for name, category_id, description, price, unit, emoji, stock, group in SEED_PRODUCTS:
+            product = db.scalar(select(Product).where(Product.name == name))
+            if product is None:
+                product = Product(name=name, category_id=category_id, description=description,
+                                  price=Decimal(price), unit=unit, emoji=emoji,
+                                  substitution_group=group)
+                db.add(product)
+                db.flush()
+            else:
+                product.category_id = category_id
+                product.substitution_group = group
+            inventory = db.scalar(select(Inventory).where(
+                Inventory.store_id == store.id, Inventory.product_id == product.id
+            ))
+            if inventory is None:
+                db.add(Inventory(store_id=store.id, product_id=product.id,
+                                 stock_on_hand=stock, reserved_qty=0))
         db.commit()
 
 
@@ -175,6 +198,54 @@ def get_product(product_id: int, store_id: int = 1, db: Session = Depends(get_db
     if product is None or not product.active:
         raise HTTPException(status_code=404, detail="Product not found.")
     return product_out(db, product, store_id)
+
+
+@app.get("/api/v1/products/{product_id}/alternatives", response_model=BasketRescueOut)
+def recommend_alternatives(
+    product_id: int,
+    store_id: int = 1,
+    quantity: int = Query(default=1, ge=1, le=99),
+    max_price: Decimal | None = Query(default=None, gt=0),
+    db: Session = Depends(get_db),
+):
+    """Return in-stock, same-use alternatives that stay within the shopper's price cap."""
+    source = db.get(Product, product_id)
+    if source is None or not source.active:
+        raise HTTPException(status_code=404, detail="Product not found.")
+    if db.get(Store, store_id) is None:
+        raise HTTPException(status_code=404, detail="Store not found.")
+
+    ceiling = max_price if max_price is not None else source.price * Decimal("1.15")
+    candidates = db.scalars(select(Product).where(
+        Product.active.is_(True),
+        Product.id != source.id,
+        Product.substitution_group == source.substitution_group,
+    )).all()
+    available = [candidate for candidate in candidates
+                 if candidate.price <= ceiling and available_for(db, candidate.id, store_id) >= quantity]
+    available.sort(key=lambda candidate: (
+        candidate.price > source.price,
+        abs(candidate.price - source.price),
+        -available_for(db, candidate.id, store_id),
+        candidate.name,
+    ))
+    recommendations = []
+    for candidate in available[:5]:
+        stock = available_for(db, candidate.id, store_id)
+        price_delta = candidate.price - source.price
+        reason = (f"Same kind · {stock} in stock" if price_delta <= 0
+                  else f"Same kind · within your ₹{ceiling - source.price:.0f} swap cap")
+        recommendations.append(AlternativeOut(
+            **product_out(db, candidate, store_id).model_dump(),
+            price_difference=float(price_delta),
+            reason=reason,
+        ))
+    return BasketRescueOut(
+        product_id=source.id,
+        requested_quantity=quantity,
+        max_price=float(ceiling),
+        alternatives=recommendations,
+    )
 
 
 @app.get("/api/v1/stores/{store_id}/inventory")

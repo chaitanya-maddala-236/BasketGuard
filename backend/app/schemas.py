@@ -41,6 +41,18 @@ class ProductOut(BaseModel):
     available_stock: int = 0
 
 
+class AlternativeOut(ProductOut):
+    price_difference: float
+    reason: str
+
+
+class BasketRescueOut(BaseModel):
+    product_id: int
+    requested_quantity: int
+    max_price: float
+    alternatives: list[AlternativeOut]
+
+
 class InventoryOut(BaseModel):
     product_id: int
     stock_on_hand: int

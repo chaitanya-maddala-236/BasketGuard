@@ -14,6 +14,20 @@ data class Product(
 
 data class Category(val id: Int, val name: String, val icon: String)
 
+data class ProductAlternative(
+    val product: Product,
+    val priceDifference: Double,
+    val reason: String,
+)
+
+data class BasketRescueItem(
+    val source: Product,
+    val quantity: Int,
+    val available: Int,
+    val alternatives: List<ProductAlternative> = emptyList(),
+    val loading: Boolean = false,
+)
+
 val demoCategories = listOf(
     Category(0, "All", "✦"),
     Category(1, "Produce", "🥑"),
@@ -22,6 +36,7 @@ val demoCategories = listOf(
     Category(4, "Pantry", "🥫"),
     Category(5, "Snacks", "🍿"),
     Category(6, "Drinks", "🧃"),
+    Category(7, "Berries", "🫐"),
 )
 
 val demoProducts = listOf(
@@ -34,5 +49,9 @@ val demoProducts = listOf(
     Product(7, "Sea salt chips", "Crispy kettle-cooked potato chips", 49.0, "120 g", "🥔", 5, "Snacks", 20),
     Product(8, "Cold brew coffee", "Slow-steeped, ready to pour", 119.0, "250 ml", "☕", 6, "Drinks", 3),
     Product(9, "Greek yogurt", "Thick, creamy, high protein", 89.0, "400 g", "🍶", 2, "Dairy", 14),
-    Product(10, "Wild blueberries", "Sweet-tart berries, frozen fresh", 169.0, "250 g", "🫐", 1, "Produce", 0),
+    Product(10, "Wild blueberries", "Sweet-tart berries, frozen fresh", 169.0, "250 g", "🫐", 7, "Berries", 0),
+    Product(11, "Sweet strawberries", "Ripe berries from a nearby farm", 139.0, "250 g", "🍓", 7, "Berries", 8),
+    Product(12, "Fresh raspberries", "Delicate, sweet-tart berry punnet", 189.0, "125 g", "🍇", 7, "Berries", 5),
+    Product(13, "Barista soy milk", "Creamy plant milk, locally made", 109.0, "1 litre", "🥛", 2, "Dairy", 9),
+    Product(14, "Multigrain loaf", "Soft loaf with oats and seeds", 119.0, "400 g", "🥖", 3, "Bakery", 7),
 )
