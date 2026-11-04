@@ -8,6 +8,7 @@ import com.basketguard.android.data.local.toCartEntity
 import com.basketguard.android.data.sync.scheduleCartSync
 import com.basketguard.android.data.network.AlternativeDto
 import com.basketguard.android.data.network.AuthRequest
+import com.basketguard.android.data.network.BasketPlanRequestDto
 import com.basketguard.android.data.network.BasketGuardApi
 import com.basketguard.android.data.network.CartLineDto
 import com.basketguard.android.data.network.CartSyncRequest
@@ -15,13 +16,19 @@ import com.basketguard.android.data.network.CartValidationRequest
 import com.basketguard.android.data.network.OrderDto
 import com.basketguard.android.data.network.OrderRequest
 import com.basketguard.android.data.network.ProductDto
+import com.basketguard.android.data.network.SmartBasketPlanDto
 import com.basketguard.android.data.network.SubstitutionDto
 import com.basketguard.android.data.network.SubstitutionCreateRequest
-import com.basketguard.android.domain.Category
-import com.basketguard.android.domain.Product
-import com.basketguard.android.domain.ProductAlternative
-import com.basketguard.android.domain.demoCategories
-import com.basketguard.android.domain.demoProducts
+import com.basketguard.shared.domain.BasketPlanGateway
+import com.basketguard.shared.domain.BasketPlanRequest
+import com.basketguard.shared.domain.BasketRescuePolicy
+import com.basketguard.shared.domain.Category
+import com.basketguard.shared.domain.PlannedProduct
+import com.basketguard.shared.domain.Product
+import com.basketguard.shared.domain.ProductAlternative
+import com.basketguard.shared.domain.SmartBasketPlan
+import com.basketguard.shared.domain.demoCategories
+import com.basketguard.shared.domain.demoProducts
 import kotlinx.coroutines.flow.Flow
 
 data class CatalogSnapshot(val products: List<Product>, val categories: List<Category>, val connected: Boolean)
@@ -30,7 +37,7 @@ class BasketRepository(
     context: Context,
     private val database: BasketGuardDatabase,
     private val api: BasketGuardApi,
-) {
+) : BasketPlanGateway {
     private val appContext = context.applicationContext
     private val cartDao = database.cartDao()
     private val session = SessionStore(appContext)
@@ -65,14 +72,54 @@ class BasketRepository(
             api.alternatives(productId = source.id, quantity = quantity, maxPrice = maxPrice)
                 .alternatives.map { it.toDomainAlternative(source.category) }
         } catch (_: Exception) {
-            cachedProducts.asSequence()
-                .filter { it.id != source.id && it.categoryId == source.categoryId }
-                .filter { it.available >= quantity && it.price <= maxPrice }
-                .map { ProductAlternative(it, it.price - source.price, "In stock · within your swap cap") }
-                .sortedBy { kotlin.math.abs(it.priceDifference) }
-                .take(5)
-                .toList()
+            BasketRescuePolicy.recommend(source, cachedProducts, quantity, budgetPercent)
         }
+    }
+
+    override suspend fun generate(request: BasketPlanRequest): SmartBasketPlan {
+        val token = session.token() ?: error("Sign in to use the AI Basket Planner.")
+        val result = api.createBasketPlan(
+            bearer = "Bearer $token",
+            request = BasketPlanRequestDto(
+                prompt = request.prompt,
+                budget = request.budget,
+                store_id = request.storeId,
+            ),
+        )
+        return SmartBasketPlan(
+            title = result.title,
+            summary = result.summary,
+            budget = result.budget,
+            estimatedTotal = result.estimated_total,
+            items = result.items.map { line ->
+                val product = Product(
+                    id = line.product_id,
+                    name = line.name,
+                    description = line.description,
+                    price = line.price,
+                    unit = line.unit,
+                    emoji = line.emoji,
+                    categoryId = line.category_id,
+                    category = line.category,
+                    available = line.available_stock,
+                    substitutionGroup = line.substitution_group,
+                )
+                PlannedProduct(product, line.quantity, line.reason)
+            },
+        )
+    }
+
+    suspend fun addPlannedProducts(items: List<PlannedProduct>) {
+        val existing = cartDao.getCart().associateBy { it.productId }
+        val additions = items.map { line ->
+            val count = (existing[line.product.id]?.quantity ?: 0) + line.quantity
+            require(count <= line.product.available) {
+                "Only ${line.product.available} ${line.product.name} available now. Refresh the plan."
+            }
+            line.product.toCartEntity(count)
+        }
+        cartDao.upsertAll(additions)
+        scheduleCartSync(appContext)
     }
 
     suspend fun authenticate(name: String, email: String, password: String, register: Boolean): String {
@@ -172,10 +219,11 @@ class BasketRepository(
         categoryId = category_id,
         category = category,
         available = available_stock,
+        substitutionGroup = substitution_group,
     )
 
     private fun AlternativeDto.toDomainAlternative(category: String) = ProductAlternative(
-        product = Product(id, name, description, price, unit, emoji, category_id, category, available_stock),
+        product = Product(id, name, description, price, unit, emoji, category_id, category, available_stock, substitution_group),
         priceDifference = price_difference,
         reason = reason,
     )

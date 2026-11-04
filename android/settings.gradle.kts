@@ -13,4 +13,4 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "BasketGuard"
-include(":app")
+include(":app", ":shared")

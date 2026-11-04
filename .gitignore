@@ -6,6 +6,7 @@
 backend/*.db
 android/.gradle/
 android/local.properties
+android/app/google-services.json
 android/**/build/
 android/.idea/
 *.iml

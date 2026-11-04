@@ -25,6 +25,12 @@ interface BasketGuardApi {
         @Query("max_price") maxPrice: Double,
     ): BasketRescueDto
 
+    @POST("ai/basket-plan")
+    suspend fun createBasketPlan(
+        @Header("Authorization") bearer: String,
+        @Body request: BasketPlanRequestDto,
+    ): SmartBasketPlanDto
+
     @GET("categories")
     suspend fun categories(): List<CategoryDto>
 

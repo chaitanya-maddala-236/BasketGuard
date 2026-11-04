@@ -10,6 +10,7 @@ All routes are prefixed by `/api/v1`. FastAPI publishes the request and response
 | GET | `/products?q=&category_id=&store_id=` | Search and filter available catalog |
 | GET | `/products/{id}` | Product details |
 | GET | `/products/{id}/alternatives?quantity=&max_price=` | Recommend same-use products in stock for the full quantity and below the shopper’s unit-price cap |
+| POST | `/ai/basket-plan` | Generate a meal basket from live store inventory under a shopper budget; requires JWT and backend AI configuration |
 | GET | `/stores/{id}/inventory` | Current on-hand, reserved, and available stock |
 | POST | `/cart/validate` | Validate cart quantities against current stock |
 | GET / PUT | `/cart` | Read or synchronize signed-in cart |

@@ -2,7 +2,7 @@ package com.basketguard.android.data.local
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
-import com.basketguard.android.domain.Product
+import com.basketguard.shared.domain.Product
 
 @Entity(tableName = "cart_items")
 data class CartEntity(

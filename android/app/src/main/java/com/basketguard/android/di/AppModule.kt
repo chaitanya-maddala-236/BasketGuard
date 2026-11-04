@@ -4,8 +4,12 @@ import android.content.Context
 import androidx.room.Room
 import com.basketguard.android.BuildConfig
 import com.basketguard.android.data.local.BasketGuardDatabase
+import com.basketguard.android.analytics.BasketAnalytics
+import com.basketguard.android.data.analytics.FirebaseBasketAnalytics
 import com.basketguard.android.data.network.BasketGuardApi
 import com.basketguard.android.data.repository.BasketRepository
+import com.basketguard.shared.domain.BasketPlanGateway
+import com.basketguard.shared.domain.GenerateBasketPlanUseCase
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -38,4 +42,17 @@ object AppModule {
         database: BasketGuardDatabase,
         api: BasketGuardApi,
     ) = BasketRepository(context, database, api)
+
+    @Provides
+    @Singleton
+    fun provideBasketPlanGateway(repository: BasketRepository): BasketPlanGateway = repository
+
+    @Provides
+    @Singleton
+    fun provideGenerateBasketPlan(gateway: BasketPlanGateway) = GenerateBasketPlanUseCase(gateway)
+
+    @Provides
+    @Singleton
+    fun provideBasketAnalytics(@ApplicationContext context: Context): BasketAnalytics =
+        FirebaseBasketAnalytics(context)
 }

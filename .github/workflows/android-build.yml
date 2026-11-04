@@ -5,11 +5,17 @@ on:
     paths:
       - "android/**"
       - "backend/**"
+      - "docs/media/**"
+      - "README.md"
+      - "tools/**"
       - ".github/workflows/android-build.yml"
   pull_request:
     paths:
       - "android/**"
       - "backend/**"
+      - "docs/media/**"
+      - "README.md"
+      - "tools/**"
       - ".github/workflows/android-build.yml"
 
 jobs:
@@ -24,9 +30,18 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.13"
+      - name: Run Android unit tests
+        working-directory: android
+        run: gradle :app:testDebugUnitTest
       - name: Assemble debug APK
         working-directory: android
         run: gradle :app:assembleDebug
+      - name: Upload debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: basketguard-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
 
   backend:
     runs-on: ubuntu-latest

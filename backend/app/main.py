@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import logging
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
@@ -15,11 +16,17 @@ from app.models import (Address, Cart, CartItem, Category, Inventory, Order,
                         OrderItem, Product, Reservation, Store, Substitution, User)
 from app.schemas import (AlternativeOut, BasketRescueOut, CartLine, CartSyncRequest, CartSyncResponse, CartValidationItem,
                          CartValidationRequest, CartValidationResponse, CategoryOut,
+                         BasketPlanItemOut, BasketPlanOut, BasketPlanRequest,
                          LoginRequest, OrderItemOut, OrderOut, OrderRequest, ProductOut,
                          RegisterRequest, ReservationOut, ReservationRequest,
                          SubstitutionCreate, SubstitutionDecision, SubstitutionOut,
                          TokenResponse)
 from app.security import create_access_token, current_user, hash_password, verify_password
+from app.services.ai_basket_planner import (
+    AIPlannerResponseError,
+    AIPlannerUnavailable,
+    create_ai_basket_draft,
+)
 
 
 SEED_CATEGORIES = [
@@ -42,6 +49,7 @@ SEED_PRODUCTS = [
     ("Barista soy milk", 2, "Creamy plant milk, locally made", "109.00", "1 litre", "🥛", 9, "plant-milk"),
     ("Multigrain loaf", 3, "Soft loaf with oats and seeds", "119.00", "400 g", "🥖", 7, "bread"),
 ]
+logger = logging.getLogger(__name__)
 
 
 def init_db() -> None:
@@ -104,7 +112,8 @@ def product_out(db: Session, product: Product, store_id: int = 1) -> ProductOut:
     return ProductOut(id=product.id, name=product.name, category_id=product.category_id,
                       description=product.description, price=product.price,
                       unit=product.unit, emoji=product.emoji, image_url=product.image_url,
-                      available_stock=available_for(db, product.id, store_id))
+                      available_stock=available_for(db, product.id, store_id),
+                      substitution_group=product.substitution_group)
 
 
 def order_out(order: Order) -> OrderOut:
@@ -245,6 +254,93 @@ def recommend_alternatives(
         requested_quantity=quantity,
         max_price=float(ceiling),
         alternatives=recommendations,
+    )
+
+
+@app.post("/api/v1/ai/basket-plan", response_model=BasketPlanOut)
+async def create_basket_plan(
+    payload: BasketPlanRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    del user
+    prompt = payload.prompt.strip()
+    if len(prompt) < 8:
+        raise HTTPException(status_code=422, detail="Describe the meal or basket you need in at least 8 characters.")
+    if db.get(Store, payload.store_id) is None:
+        raise HTTPException(status_code=404, detail="Store not found.")
+
+    catalog = db.scalars(select(Product).where(Product.active.is_(True))
+                         .options(joinedload(Product.category))).unique().all()
+    available_by_id = {
+        product.id: available_for(db, product.id, payload.store_id)
+        for product in catalog
+    }
+    available_catalog = [
+        {
+            "id": product.id,
+            "name": product.name,
+            "category": product.category.name if product.category else "",
+            "description": product.description,
+            "price_inr": float(product.price),
+            "unit": product.unit,
+            "available_stock": available_by_id[product.id],
+        }
+        for product in catalog if available_by_id[product.id] > 0
+    ]
+    if not available_catalog:
+        raise HTTPException(status_code=422, detail="This store has no available products to plan with.")
+
+    try:
+        draft = await create_ai_basket_draft(prompt, payload.budget, available_catalog)
+    except AIPlannerUnavailable as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except AIPlannerResponseError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("AI basket planner request failed")
+        raise HTTPException(status_code=502, detail="The AI planner is temporarily unavailable. Try again.") from error
+
+    by_id = {product.id: product for product in catalog}
+    seen: set[int] = set()
+    output_items = []
+    estimated_total = Decimal("0")
+    for suggestion in draft.items:
+        product = by_id.get(suggestion.product_id)
+        if product is None or not product.active or suggestion.product_id in seen:
+            raise HTTPException(status_code=502, detail="The AI planner selected an invalid or repeated catalog item.")
+        seen.add(product.id)
+        available = available_for(db, product.id, payload.store_id)
+        if available < suggestion.quantity:
+            raise HTTPException(status_code=409, detail="Store stock changed while building this plan. Generate it again.")
+        line_total = product.price * suggestion.quantity
+        estimated_total += line_total
+        output_items.append(BasketPlanItemOut(
+            product_id=product.id,
+            name=product.name,
+            category_id=product.category_id,
+            category=product.category.name if product.category else "",
+            description=product.description,
+            price=float(product.price),
+            unit=product.unit,
+            emoji=product.emoji,
+            substitution_group=product.substitution_group,
+            quantity=suggestion.quantity,
+            available_stock=available,
+            line_total=float(line_total),
+            reason=suggestion.reason,
+        ))
+    if estimated_total > payload.budget:
+        raise HTTPException(status_code=502, detail="The AI plan exceeded the budget and was rejected. Try again.")
+
+    return BasketPlanOut(
+        title=draft.title,
+        summary=draft.summary,
+        budget=float(payload.budget),
+        estimated_total=float(estimated_total),
+        remaining_budget=float(payload.budget - estimated_total),
+        items=output_items,
+        ai_powered=True,
     )
 
 

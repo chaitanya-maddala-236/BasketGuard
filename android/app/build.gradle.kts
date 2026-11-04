@@ -7,6 +7,10 @@ plugins {
     alias(libs.plugins.hilt)
 }
 
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 android {
     namespace = "com.basketguard.android"
     compileSdk = 36
@@ -54,6 +58,10 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.coroutines.android)
     implementation(libs.hilt.android)
+    implementation(project(":shared"))
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.analytics)
     kapt(libs.hilt.compiler)
     debugImplementation(libs.androidx.compose.ui.tooling)
+    testImplementation(libs.junit)
 }

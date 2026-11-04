@@ -1,0 +1,40 @@
+name: Publish BasketGuard demo release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
+      - name: Run Android unit tests
+        working-directory: android
+        run: gradle :app:testDebugUnitTest
+      - name: Assemble debug APK
+        working-directory: android
+        run: gradle :app:assembleDebug
+      - name: Prepare stable APK filename
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk android/app/build/outputs/apk/debug/basketguard-debug.apk
+      - name: Publish APK and product walkthrough
+        uses: softprops/action-gh-release@v2
+        with:
+          name: BasketGuard ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            android/app/build/outputs/apk/debug/basketguard-debug.apk
+            docs/media/basketguard-walkthrough.mp4
+            docs/media/basketguard-walkthrough.gif
+            docs/media/basketguard-preview.png

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
@@ -39,6 +40,7 @@ class ProductOut(BaseModel):
     emoji: str
     image_url: str | None = None
     available_stock: int = 0
+    substitution_group: str = "general"
 
 
 class AlternativeOut(ProductOut):
@@ -51,6 +53,38 @@ class BasketRescueOut(BaseModel):
     requested_quantity: int
     max_price: float
     alternatives: list[AlternativeOut]
+
+
+class BasketPlanRequest(BaseModel):
+    prompt: str = Field(min_length=8, max_length=240)
+    budget: Decimal = Field(gt=Decimal("0"), le=Decimal("20000"))
+    store_id: int = Field(default=1, gt=0)
+
+
+class BasketPlanItemOut(BaseModel):
+    product_id: int
+    name: str
+    category_id: int
+    category: str
+    description: str
+    price: float
+    unit: str
+    emoji: str
+    substitution_group: str
+    quantity: int
+    available_stock: int
+    line_total: float
+    reason: str
+
+
+class BasketPlanOut(BaseModel):
+    title: str
+    summary: str
+    budget: float
+    estimated_total: float
+    remaining_budget: float
+    items: list[BasketPlanItemOut]
+    ai_powered: bool = True
 
 
 class InventoryOut(BaseModel):

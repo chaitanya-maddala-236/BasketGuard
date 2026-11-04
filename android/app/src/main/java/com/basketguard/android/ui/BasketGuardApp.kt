@@ -3,6 +3,7 @@ package com.basketguard.android.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -78,6 +79,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -85,14 +88,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.basketguard.android.AppUiState
-import com.basketguard.android.AppViewModel
+import com.basketguard.android.presentation.AppUiState
+import com.basketguard.android.presentation.AppViewModel
 import com.basketguard.android.data.local.CartEntity
 import com.basketguard.android.data.network.OrderDto
 import com.basketguard.android.data.network.SubstitutionDto
-import com.basketguard.android.domain.BasketRescueItem
-import com.basketguard.android.domain.Product
-import com.basketguard.android.domain.ProductAlternative
+import com.basketguard.shared.domain.BasketRescueItem
+import com.basketguard.shared.domain.Product
+import com.basketguard.shared.domain.ProductAlternative
+import com.basketguard.shared.domain.SmartBasketPlan
 import java.util.Locale
 
 private enum class Tab(val title: String) { HOME("Home"), CART("Basket"), ORDERS("Orders"), PROFILE("Profile") }
@@ -101,7 +105,6 @@ private val Mint = Color(0xFFDCEDE0)
 private val Warm = Color(0xFFF7F6F0)
 private val Ink = Color(0xFF1E2924)
 private val Muted = Color(0xFF748078)
-private val Orange = Color(0xFFFFE5CC)
 private val RescueWash = Color(0xFFFFF0E4)
 
 @Composable
@@ -176,6 +179,7 @@ private fun HomeScreen(state: AppUiState, viewModel: AppViewModel, onProfile: ()
     var selectedCategory by rememberSaveable { mutableStateOf(0) }
     var details by remember { mutableStateOf<Product?>(null) }
     var swapFor by remember { mutableStateOf<Product?>(null) }
+    var plannerOpen by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(swapFor?.id, state.rescueBudgetPercent) {
         swapFor?.let { viewModel.loadAlternatives(it, quantity = 1) }
     }
@@ -210,6 +214,26 @@ private fun HomeScreen(state: AppUiState, viewModel: AppViewModel, onProfile: ()
             )
         }
         item { BasketHero() }
+        item {
+            Card(
+                onClick = { plannerOpen = true },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(22.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+            ) {
+                Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(48.dp).clip(RoundedCornerShape(16.dp)).background(Mint), contentAlignment = Alignment.Center) {
+                        Text("✨", fontSize = 24.sp)
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("AI Basket Planner", color = Ink, fontWeight = FontWeight.ExtraBold)
+                        Text("Plan a meal with live stock and your budget.", color = Muted, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Text("PLAN  ›", color = Forest, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.ExtraBold)
+                }
+            }
+        }
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Browse by aisle", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Ink)
@@ -290,6 +314,110 @@ private fun HomeScreen(state: AppUiState, viewModel: AppViewModel, onProfile: ()
             }
         }
     }
+    if (plannerOpen) {
+        SmartBasketPlannerSheet(
+            state = state,
+            onDismiss = { plannerOpen = false },
+            onSignIn = { plannerOpen = false; onProfile() },
+            onCreatePlan = viewModel::requestSmartBasketPlan,
+            onAddPlan = viewModel::addSmartPlanToBasket,
+        )
+    }
+}
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun SmartBasketPlannerSheet(
+    state: AppUiState,
+    onDismiss: () -> Unit,
+    onSignIn: () -> Unit,
+    onCreatePlan: (String, Double) -> Unit,
+    onAddPlan: () -> Unit,
+) {
+    var prompt by rememberSaveable { mutableStateOf("Quick vegetarian dinner for two") }
+    var budget by rememberSaveable { mutableStateOf("350") }
+    val plan = state.smartBasketPlan
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Warm) {
+        Column(
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
+                .padding(horizontal = 22.dp).padding(bottom = 30.dp),
+            verticalArrangement = Arrangement.spacedBy(13.dp),
+        ) {
+            Text("AI Basket Planner", color = Ink, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold)
+            Text("Describe a meal or shopping need. The planner can only choose from this store’s live catalog; the server checks stock and total before showing a plan.", color = Muted, style = MaterialTheme.typography.bodyMedium)
+            OutlinedTextField(
+                value = prompt,
+                onValueChange = { prompt = it.take(240) },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("What do you need?") },
+                minLines = 2,
+                maxLines = 3,
+                shape = RoundedCornerShape(16.dp),
+                colors = TextFieldDefaults.colors(focusedContainerColor = Color.White, unfocusedContainerColor = Color.White),
+            )
+            OutlinedTextField(
+                value = budget,
+                onValueChange = { value -> if (value.all { it.isDigit() || it == '.' } && value.length <= 7) budget = value },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Budget (₹)") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                shape = RoundedCornerShape(16.dp),
+                colors = TextFieldDefaults.colors(focusedContainerColor = Color.White, unfocusedContainerColor = Color.White),
+            )
+            if (state.accountName == null) {
+                Card(shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF4E8))) {
+                    Row(Modifier.fillMaxWidth().padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Sign in to create a private, budget-checked plan.", color = Ink, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = onSignIn) { Text("Sign in", color = Forest) }
+                    }
+                }
+            }
+            Button(
+                onClick = { budget.toDoubleOrNull()?.let { onCreatePlan(prompt, it) } },
+                enabled = state.accountName != null && !state.planning && !state.busy && prompt.trim().length >= 8 && (budget.toDoubleOrNull() ?: 0.0) > 0,
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape = RoundedCornerShape(16.dp),
+            ) {
+                if (state.planning) CircularProgressIndicator(Modifier.size(19.dp), color = Color.White, strokeWidth = 2.dp)
+                else Text("Build my basket", fontWeight = FontWeight.Bold)
+            }
+            plan?.let {
+                SmartBasketPlanCard(it, enabled = !state.busy, onAdd = onAddPlan)
+            }
+            Text("AI suggestions are not allergen or medical advice. Check product labels before buying.", color = Muted, style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
+@Composable
+private fun SmartBasketPlanCard(plan: SmartBasketPlan, enabled: Boolean, onAdd: () -> Unit) {
+    Card(shape = RoundedCornerShape(21.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+        Column(Modifier.fillMaxWidth().padding(15.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(plan.title, color = Ink, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold)
+            Text(plan.summary, color = Muted, style = MaterialTheme.typography.bodySmall)
+            plan.items.forEach { line ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(line.product.emoji, fontSize = 22.sp)
+                    Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("${line.quantity} × ${line.product.name}", color = Ink, fontWeight = FontWeight.SemiBold)
+                        Text(line.reason, color = Muted, style = MaterialTheme.typography.labelSmall)
+                    }
+                    Text(money(line.product.price * line.quantity), color = Ink, fontWeight = FontWeight.Bold)
+                }
+            }
+            Card(shape = RoundedCornerShape(15.dp), colors = CardDefaults.cardColors(containerColor = Mint)) {
+                Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    PriceLine("AI plan total", money(plan.estimatedTotal))
+                    PriceLine("Remaining budget", money((plan.budget - plan.estimatedTotal).coerceAtLeast(0.0)))
+                }
+            }
+            Button(onClick = onAdd, enabled = enabled, modifier = Modifier.fillMaxWidth().height(48.dp), shape = RoundedCornerShape(15.dp)) {
+                Text("Add checked items to basket", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
 }
 
 @Composable
@@ -319,8 +447,19 @@ private fun BasketHero() {
         shape = RoundedCornerShape(26.dp),
         colors = CardDefaults.cardColors(containerColor = Forest),
     ) {
-        Box(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Color(0xFF205747), Color(0xFF11392F))))) {
-            Column(Modifier.padding(horizontal = 20.dp, vertical = 19.dp).fillMaxWidth(0.77f)) {
+        Box(Modifier.fillMaxWidth().height(190.dp).clip(RoundedCornerShape(26.dp))) {
+            Image(
+                painter = painterResource(com.basketguard.android.R.drawable.basketguard_hero),
+                contentDescription = "Fresh groceries in a reusable shopping tote",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
+            Box(
+                Modifier.fillMaxSize().background(
+                    Brush.horizontalGradient(listOf(Color(0xF011392F), Color(0xB011392F), Color.Transparent))
+                )
+            )
+            Column(Modifier.align(Alignment.CenterStart).padding(horizontal = 20.dp, vertical = 18.dp).fillMaxWidth(0.84f)) {
                 Surface(shape = CircleShape, color = Color(0xFF356B58)) {
                     Row(Modifier.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Outlined.VerifiedUser, contentDescription = null, tint = Color(0xFFBCE4BF), modifier = Modifier.size(14.dp))
@@ -333,7 +472,6 @@ private fun BasketHero() {
                 Spacer(Modifier.height(6.dp))
                 Text("Set a price cap. Pick every replacement yourself.", color = Color(0xFFD5E6DC), style = MaterialTheme.typography.bodySmall)
             }
-            Text("🧺", fontSize = 54.sp, modifier = Modifier.align(Alignment.CenterEnd).padding(end = 18.dp))
         }
     }
 }

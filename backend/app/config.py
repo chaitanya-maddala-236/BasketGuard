@@ -9,4 +9,6 @@ load_dotenv(ROOT.parent / ".env")
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{ROOT / 'basketguard.db'}")
 JWT_SECRET = os.getenv("JWT_SECRET", "basketguard-local-development-secret-change-me")
 ACCESS_TOKEN_MINUTES = int(os.getenv("ACCESS_TOKEN_MINUTES", "60"))
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
 JWT_ALGORITHM = "HS256"

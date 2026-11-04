@@ -6,6 +6,8 @@ BasketGuard is a native grocery shopping app that makes stock availability visib
 
 Its core differentiator is Basket Rescue: when an item sells out after it enters the basket, offer functionally similar, locally available options that match the quantity and a shopper-controlled price cap. The shopper can choose a swap, keep only the units still available, or remove the item.
 
+BasketGuard also includes an AI Basket Planner for a common shopping task: turning a meal idea and a rupee budget into a practical basket from a store's live catalog. The server checks the model's proposed product IDs, stock, quantities, and total before presenting the plan.
+
 ## Users
 
 - Shoppers discovering groceries, building a basket, and tracking orders.
@@ -20,6 +22,7 @@ Its core differentiator is Basket Rescue: when an item sells out after it enters
 4. If stock changed, compare same-use alternatives in stock for the full quantity and within the saved price cap; choose a replacement, reduce quantity, or remove the item.
 5. Sign in, submit a mock-payment order, and receive an idempotent order response.
 6. View order history and ask for or approve/reject an item replacement.
+7. Ask the AI planner for a budgeted meal basket and add the validated items to the basket.
 
 ## Product rules
 

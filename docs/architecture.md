@@ -2,18 +2,18 @@
 
 ```text
 Android app
-Compose screens → AppViewModel → BasketRepository
-                                  ├── Room (offline basket)
-                                  ├── DataStore (JWT session)
-                                  ├── Retrofit (BasketGuard API)
-                                  └── WorkManager (network-constrained cart sync)
+Compose UI → presentation ViewModel (StateFlow) → shared KMP domain / use cases
+                                                  ↑
+data adapters: Room · DataStore · Retrofit · WorkManager · optional Firebase Analytics
 
 FastAPI modular monolith
-API routes → SQLAlchemy session → PostgreSQL (authoritative inventory)
-                                └→ SQLite (local development fallback)
+Routes → SQLAlchemy → PostgreSQL inventory / SQLite development fallback
+   └── AI basket planner → OpenAI Responses API (strict JSON schema)
 ```
 
-The Android MVP uses one Gradle application module with package boundaries for UI, domain, local storage, network access, and repository coordination. Hilt provides the Room database, Retrofit client, and repository as application-scoped dependencies, and injects the ViewModel into the activity. The repository is the only data boundary consumed by the ViewModel.
+The Android app keeps Compose rendering and StateFlow presentation state separate from data adapters. The `shared` KMP module contains platform-independent grocery models, Basket Rescue ranking, and the AI-plan use case; Android consumes the module and declares Android and iOS targets. Repository adapters map API and Room models into shared domain models. Hilt wires the app-scoped data adapters and use case.
+
+The AI planner sends the shopper's meal request, budget, and currently available catalog to the backend model provider. The model can suggest product IDs and quantities; the server resolves every ID against the database, checks live stock and recomputes all line totals before returning a plan. The API key remains on the backend. Firebase Analytics records non-identifying rescue and plan events when a Firebase project configuration is supplied; otherwise the adapter is a no-op.
 
 The API keeps inventory operations transactional. Reservation and checkout use conditional SQL updates so concurrent requests compete on the same inventory row. Redis is intentionally not used as inventory truth. A unique `(user_id, idempotency_key)` constraint protects checkout retries.
 

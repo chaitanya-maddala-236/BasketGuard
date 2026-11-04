@@ -20,6 +20,8 @@ services:
       DATABASE_URL: postgresql+psycopg://basketguard:basketguard@db:5432/basketguard
       JWT_SECRET: local-compose-secret-change-before-deploy
       ACCESS_TOKEN_MINUTES: 60
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.5}
     ports:
       - "8000:8000"
     depends_on:

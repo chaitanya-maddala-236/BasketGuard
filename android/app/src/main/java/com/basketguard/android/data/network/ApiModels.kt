@@ -10,6 +10,7 @@ data class ProductDto(
     val category_id: Int,
     val image_url: String? = null,
     val available_stock: Int = 0,
+    val substitution_group: String = "general",
 )
 
 data class AlternativeDto(
@@ -24,6 +25,7 @@ data class AlternativeDto(
     val available_stock: Int = 0,
     val price_difference: Double,
     val reason: String,
+    val substitution_group: String = "general",
 )
 
 data class BasketRescueDto(
@@ -31,6 +33,37 @@ data class BasketRescueDto(
     val requested_quantity: Int,
     val max_price: Double,
     val alternatives: List<AlternativeDto>,
+)
+
+data class BasketPlanRequestDto(
+    val prompt: String,
+    val budget: Double,
+    val store_id: Int = 1,
+)
+
+data class PlannedProductDto(
+    val product_id: Int,
+    val name: String,
+    val category_id: Int,
+    val category: String,
+    val description: String,
+    val price: Double,
+    val unit: String,
+    val emoji: String,
+    val substitution_group: String,
+    val quantity: Int,
+    val available_stock: Int,
+    val line_total: Double,
+    val reason: String,
+)
+
+data class SmartBasketPlanDto(
+    val title: String,
+    val summary: String,
+    val budget: Double,
+    val estimated_total: Double,
+    val remaining_budget: Double,
+    val items: List<PlannedProductDto>,
 )
 
 data class CategoryDto(val id: Int, val name: String, val icon: String)

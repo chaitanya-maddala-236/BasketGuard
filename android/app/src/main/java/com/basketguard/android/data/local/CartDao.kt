@@ -17,6 +17,9 @@ interface CartDao {
     @Upsert
     suspend fun upsert(item: CartEntity)
 
+    @Upsert
+    suspend fun upsertAll(items: List<CartEntity>)
+
     @Query("DELETE FROM cart_items WHERE productId = :productId")
     suspend fun remove(productId: Int)
 

@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import com.basketguard.android.presentation.AppViewModel
 import com.basketguard.android.ui.BasketGuardApp
 import com.basketguard.android.ui.theme.BasketGuardTheme
 import dagger.hilt.android.AndroidEntryPoint

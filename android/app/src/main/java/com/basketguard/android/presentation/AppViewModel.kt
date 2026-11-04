@@ -1,4 +1,4 @@
-package com.basketguard.android
+package com.basketguard.android.presentation
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -8,12 +8,17 @@ import com.basketguard.android.data.local.CartEntity
 import com.basketguard.android.data.network.OrderDto
 import com.basketguard.android.data.network.SubstitutionDto
 import com.basketguard.android.data.repository.BasketRepository
-import com.basketguard.android.domain.BasketRescueItem
-import com.basketguard.android.domain.Category
-import com.basketguard.android.domain.Product
-import com.basketguard.android.domain.ProductAlternative
-import com.basketguard.android.domain.demoCategories
-import com.basketguard.android.domain.demoProducts
+import com.basketguard.android.analytics.BasketAnalytics
+import com.basketguard.shared.domain.BasketPlanRequest
+import com.basketguard.shared.domain.BasketRescueItem
+import com.basketguard.shared.domain.Category
+import com.basketguard.shared.domain.GenerateBasketPlanUseCase
+import com.basketguard.shared.domain.PlannedProduct
+import com.basketguard.shared.domain.Product
+import com.basketguard.shared.domain.ProductAlternative
+import com.basketguard.shared.domain.SmartBasketPlan
+import com.basketguard.shared.domain.demoCategories
+import com.basketguard.shared.domain.demoProducts
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -33,10 +38,16 @@ data class AppUiState(
     val rescueItems: List<BasketRescueItem> = emptyList(),
     val alternatives: Map<Int, List<ProductAlternative>> = emptyMap(),
     val alternativesLoading: Set<Int> = emptySet(),
+    val smartBasketPlan: SmartBasketPlan? = null,
+    val planning: Boolean = false,
 )
 
 @HiltViewModel
-class AppViewModel @Inject constructor(private val repository: BasketRepository) : ViewModel() {
+class AppViewModel @Inject constructor(
+    private val repository: BasketRepository,
+    private val generateBasketPlan: GenerateBasketPlanUseCase,
+    private val analytics: BasketAnalytics,
+) : ViewModel() {
     private val mutableState = MutableStateFlow(AppUiState())
     val state = mutableState.asStateFlow()
 
@@ -128,6 +139,10 @@ class AppViewModel @Inject constructor(private val repository: BasketRepository)
                 if (!validation.valid) {
                     val rescueItems = prepareRescue(validation, current.cart, current.products,
                         current.rescueBudgetPercent)
+                    analytics.event("stockout_rescue_shown", mapOf(
+                        "issue_count" to rescueItems.size.toLong(),
+                        "budget_percent" to current.rescueBudgetPercent.toLong(),
+                    ))
                     mutableState.update { it.copy(busy = false, rescueItems = rescueItems, message = null) }
                     return@launch
                 }
@@ -163,6 +178,43 @@ class AppViewModel @Inject constructor(private val repository: BasketRepository)
         }
     }
 
+    fun requestSmartBasketPlan(prompt: String, budget: Double) {
+        viewModelScope.launch {
+            mutableState.update { it.copy(planning = true, smartBasketPlan = null, message = null) }
+            try {
+                val plan = generateBasketPlan(BasketPlanRequest(prompt = prompt, budget = budget))
+                analytics.event("ai_basket_plan_created", mapOf(
+                    "item_count" to plan.items.size.toLong(),
+                    "budget_bucket" to when {
+                        budget < 250 -> "under_250"
+                        budget < 500 -> "250_to_499"
+                        else -> "500_plus"
+                    },
+                ))
+                mutableState.update { it.copy(planning = false, smartBasketPlan = plan) }
+            } catch (error: Exception) {
+                mutableState.update { it.copy(planning = false,
+                    message = error.message?.take(180) ?: "Couldn’t make a basket plan. Try again.") }
+            }
+        }
+    }
+
+    fun addSmartPlanToBasket() {
+        val plan = state.value.smartBasketPlan ?: return
+        viewModelScope.launch {
+            mutableState.update { it.copy(busy = true) }
+            try {
+                repository.addPlannedProducts(plan.items)
+                analytics.event("ai_basket_plan_added", mapOf("item_count" to plan.items.size.toLong()))
+                mutableState.update { it.copy(busy = false, smartBasketPlan = null,
+                    message = "${plan.items.size} planned items added to your basket.") }
+            } catch (error: Exception) {
+                mutableState.update { it.copy(busy = false,
+                    message = error.message ?: "Some planned items are no longer available.") }
+            }
+        }
+    }
+
     fun setRescueBudget(percent: Int) {
         if (percent !in listOf(0, 15, 30)) return
         viewModelScope.launch {
@@ -195,6 +247,11 @@ class AppViewModel @Inject constructor(private val repository: BasketRepository)
             mutableState.update { it.copy(busy = true) }
             try {
                 repository.replaceCartItem(sourceProductId, alternative, quantity)
+                analytics.event("stockout_substitute_selected", mapOf(
+                    "source_product_id" to sourceProductId.toLong(),
+                    "replacement_product_id" to alternative.product.id.toLong(),
+                    "quantity" to quantity.toLong(),
+                ))
                 mutableState.update { it.copy(busy = false,
                     rescueItems = it.rescueItems.filterNot { row -> row.source.id == sourceProductId },
                     message = "${alternative.product.name} added within your swap budget.") }
@@ -226,6 +283,7 @@ class AppViewModel @Inject constructor(private val repository: BasketRepository)
             mutableState.update { it.copy(busy = true) }
             try {
                 repository.setQuantity(source.source, 0)
+                analytics.event("stockout_item_removed", mapOf("product_id" to sourceProductId.toLong()))
                 mutableState.update { it.copy(busy = false,
                     rescueItems = it.rescueItems.filterNot { row -> row.source.id == sourceProductId },
                     message = "${source.source.name} removed from your basket.") }

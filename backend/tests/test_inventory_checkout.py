@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 from app import main
 from app.db import Base, get_db
 from app.models import Category, Inventory, Product, Store
+from app.services.ai_basket_planner import AIPlanDraft, AIPlanItem
 
 
 @pytest.fixture
@@ -126,6 +127,80 @@ def test_basket_rescue_respects_budget_and_requested_quantity(client: TestClient
     assert body["requested_quantity"] == 2
     assert [item["id"] for item in body["alternatives"]] == [3]
     assert body["alternatives"][0]["available_stock"] == 4
+
+
+def test_ai_basket_plan_returns_only_server_checked_catalog_items(client: TestClient, monkeypatch):
+    async def fake_plan(prompt, budget, catalog):
+        assert prompt == "Quick avocado dinner"
+        assert {item["id"] for item in catalog} == {1, 2, 3, 4, 5}
+        return AIPlanDraft(title="Avocado dinner", summary="A compact store-based basket.", items=[
+            AIPlanItem(product_id=3, quantity=2, reason="Closest in-stock match"),
+        ])
+
+    monkeypatch.setattr(main, "create_ai_basket_draft", fake_plan)
+    response = client.post("/api/v1/ai/basket-plan", headers=signed_in(client), json={
+        "prompt": "Quick avocado dinner",
+        "budget": 4.00,
+        "store_id": 1,
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ai_powered"] is True
+    assert body["estimated_total"] == 3.2
+    assert body["remaining_budget"] == 0.8
+    assert body["items"][0]["available_stock"] == 4
+
+
+def test_ai_basket_plan_rejects_model_output_over_budget(client: TestClient, monkeypatch):
+    async def fake_plan(_prompt, _budget, _catalog):
+        return AIPlanDraft(title="Too much", summary="This does not fit.", items=[
+            AIPlanItem(product_id=3, quantity=3, reason="A model suggestion"),
+        ])
+
+    monkeypatch.setattr(main, "create_ai_basket_draft", fake_plan)
+    response = client.post("/api/v1/ai/basket-plan", headers=signed_in(client), json={
+        "prompt": "Quick avocado dinner",
+        "budget": 4.00,
+        "store_id": 1,
+    })
+
+    assert response.status_code == 502
+    assert "exceeded the budget" in response.json()["detail"]
+
+
+def test_ai_basket_plan_rejects_stock_race(client: TestClient, monkeypatch):
+    async def fake_plan(_prompt, _budget, _catalog):
+        return AIPlanDraft(title="Stock race", summary="Stock changed.", items=[
+            AIPlanItem(product_id=3, quantity=5, reason="A model suggestion"),
+        ])
+
+    monkeypatch.setattr(main, "create_ai_basket_draft", fake_plan)
+    response = client.post("/api/v1/ai/basket-plan", headers=signed_in(client), json={
+        "prompt": "Quick avocado dinner",
+        "budget": 10.00,
+        "store_id": 1,
+    })
+
+    assert response.status_code == 409
+    assert "stock changed" in response.json()["detail"]
+
+
+def test_ai_basket_plan_rejects_product_ids_outside_the_catalog(client: TestClient, monkeypatch):
+    async def fake_plan(_prompt, _budget, _catalog):
+        return AIPlanDraft(title="Invented item", summary="This ID is not in this store.", items=[
+            AIPlanItem(product_id=999, quantity=1, reason="A model suggestion"),
+        ])
+
+    monkeypatch.setattr(main, "create_ai_basket_draft", fake_plan)
+    response = client.post("/api/v1/ai/basket-plan", headers=signed_in(client), json={
+        "prompt": "Quick avocado dinner",
+        "budget": 10.00,
+        "store_id": 1,
+    })
+
+    assert response.status_code == 502
+    assert "invalid" in response.json()["detail"]
 
 
 def test_checkout_retry_returns_original_order_without_consuming_stock_twice(client: TestClient):
