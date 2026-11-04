@@ -85,7 +85,7 @@ object BasketRescuePolicy {
         return candidates.asSequence()
             .filter { it.id != source.id && it.substitutionGroup == source.substitutionGroup }
             .filter { it.available >= quantity && it.price <= ceiling }
-            .sortedWith(compareBy<Product>({ it.price > source.price }, { kotlin.math.abs(it.price - source.price) }, { -it.available }, { it.name }))
+            .sortedWith(compareBy<Product>({ it.price >= source.price }, { kotlin.math.abs(it.price - source.price) }, { -it.available }, { it.name }))
             .take(limit)
             .map { product ->
                 val difference = product.price - source.price
