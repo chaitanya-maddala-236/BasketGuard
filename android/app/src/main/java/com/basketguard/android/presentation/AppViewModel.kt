@@ -69,7 +69,7 @@ class AppViewModel @Inject constructor(
         }
     }
 
-    fun add(product: Product) = changeQuantity(product, (state.value.cart.firstOrNull { it.productId == product.id }?.quantity ?: 0) + 1)
+    fun add(product: Product) = changeQuantity(product.id, (state.value.cart.firstOrNull { it.productId == product.id }?.quantity ?: 0) + 1)
 
     fun changeQuantity(productId: Int, quantity: Int) {
         viewModelScope.launch {
